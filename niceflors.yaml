@@ -1,0 +1,259 @@
+substitutions:
+  hostname: niceflors
+  device_name: Nice Flor-s
+
+globals:
+  # Serial of the remote
+  - id: remote_serial
+    type: uint32_t
+    restore_value: no
+    initial_value: '0x00e48dca'
+  # Button IDs
+  - id: button_stop
+    type: uint8_t
+    restore_value: no
+    initial_value: '0x02'
+  - id: button_open
+    type: uint8_t
+    restore_value: no
+    initial_value: '0x01'
+  - id: button_close
+    type: uint8_t
+    restore_value: no
+    initial_value: '0x04'
+  # Transmitter configuration
+  - id: nb_bits
+    type: int
+    restore_value: no
+    initial_value: '52'
+  - id: tx_short
+    type: int
+    restore_value: no
+    initial_value: '500'
+  - id: tx_long
+    type: int
+    restore_value: no
+    initial_value: '1000'
+  - id: tx_sync
+    type: int
+    restore_value: no
+    initial_value: '1500'
+  - id: tx_gap
+    type: int
+    restore_value: no
+    initial_value: '15000'
+
+esphome:
+  name: ${hostname}
+  friendly_name: ${device_name}
+  comment: "Nice Flor-s"
+  project:
+    name: "ESPHome.Nice"
+    version: "Nice Flor-s"
+
+  includes:
+    - ./niceflors/codes.h
+    - ./niceflors/nice.h
+
+preferences:
+  flash_write_interval: 0s
+
+esp8266:
+  board: esp12e
+  restore_from_flash: true 
+
+mdns:
+  disabled: true
+
+time:
+  - platform: sntp
+    timezone: Europe/Amsterdam
+    servers:
+      - "pool.ntp.org"
+
+logger:
+  level: INFO
+  logs:
+    component: ERROR
+
+api:
+  encryption:
+    key: !secret api_key
+  reboot_timeout: 24h
+
+ota:
+  password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+web_server:
+  port: 80
+  local: true
+  version: 2
+  auth:
+    username: admin
+    password: !secret web_password
+
+remote_transmitter:
+  pin: GPIO5
+  id: transmitter
+  carrier_duty_percent: 100%
+
+sensor:
+  - platform: wifi_signal
+    name: "RSSI"
+    update_interval: 1min
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 1min
+  - platform: adc
+    pin: VCC
+    name: "Power Supply"
+
+text_sensor:
+  - platform: template
+    name: "Code"
+    id: current_code
+  - platform: template
+    name: "Serial"
+    lambda: 'return "0x" + esphome::format_hex(id(remote_serial));'
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+    ssid:
+      name: "SSID"
+    bssid:
+      name: "BSSID"
+    mac_address:
+      name: "MAC"
+
+output:
+  - id: tx_light_output
+    platform: gpio
+    pin: 
+      number: GPIO16
+      inverted: true
+
+light:
+  - platform: status_led
+    name: "Status LED"
+    id: status_led_light
+    internal: true
+    pin:
+      number: GPIO2
+      inverted: true
+
+  - platform: binary
+    output: tx_light_output
+    id: "tx_light"
+    internal: true
+
+number:
+  - platform: template
+    id: repeat
+    internal: true
+    optimistic: true
+    restore_value: false
+    min_value: 1
+    max_value: 7
+    step: 1
+  - platform: template
+    id: code
+    internal: true
+    optimistic: true
+    restore_value: true
+    min_value: 0
+    max_value: 65535
+    step: 1
+    on_value:
+      then:
+        - text_sensor.template.publish:
+            id: current_code
+            state: !lambda 'return std::to_string((int)x);'
+
+button:
+  - platform: safe_mode
+    name: "Restart (Safe Mode)"
+  - platform: restart
+    name: "Restart"
+  - platform: factory_reset
+    name: "Factory Reset"
+
+  - platform: template
+    name: "Pairing"
+    on_press:
+      - number.to_min: repeat
+      - repeat:
+          count: 10
+          then:
+            - light.turn_on: "tx_light"
+            - remote_transmitter.transmit_raw:
+                code: !lambda |-
+                  uint64_t encoded = nice_flor_s_encode(id(remote_serial), id(code).state, id(button_close), id(repeat).state);
+                  std::vector<int> tx_signal = nice_flor_s_generate_tx(encoded);
+                  return tx_signal;
+            - delay: 1ms
+            - light.turn_off: "tx_light"
+            - delay: 1ms
+            - number.increment: repeat
+      - number.to_min: repeat
+      - number.increment: code
+  - platform: template
+    name: "Open"
+    on_press:
+      - number.to_min: repeat
+      - repeat:
+          count: 7
+          then:
+            - light.turn_on: "tx_light"
+            - remote_transmitter.transmit_raw:
+                code: !lambda |-
+                  uint64_t encoded = nice_flor_s_encode(id(remote_serial), id(code).state, id(button_open), id(repeat).state);
+                  std::vector<int> tx_signal = nice_flor_s_generate_tx(encoded);
+                  return tx_signal;
+            - delay: 1ms
+            - light.turn_off: "tx_light"
+            - delay: 1ms
+            - number.increment: repeat
+      - number.to_min: repeat
+      - number.increment: code
+  - platform: template
+    name: "Close"
+    on_press:
+      - number.to_min: repeat
+      - repeat:
+          count: 7
+          then:
+            - light.turn_on: "tx_light"
+            - remote_transmitter.transmit_raw:
+                code: !lambda |-
+                  uint64_t encoded = nice_flor_s_encode(id(remote_serial), id(code).state, id(button_close), id(repeat).state);
+                  std::vector<int> tx_signal = nice_flor_s_generate_tx(encoded);
+                  return tx_signal;
+            - delay: 1ms
+            - light.turn_off: "tx_light"
+            - delay: 1ms
+            - number.increment: repeat
+      - number.to_min: repeat
+      - number.increment: code
+  - platform: template
+    name: "Stop"
+    on_press:
+      - number.to_min: repeat
+      - repeat:
+          count: 7
+          then:
+            - light.turn_on: "tx_light"
+            - remote_transmitter.transmit_raw:
+                code: !lambda |-
+                  uint64_t encoded = nice_flor_s_encode(id(remote_serial), id(code).state, id(button_stop), id(repeat).state);
+                  std::vector<int> tx_signal = nice_flor_s_generate_tx(encoded);
+                  return tx_signal;
+            - delay: 1ms
+            - light.turn_off: "tx_light"
+            - delay: 1ms
+            - number.increment: repeat
+      - number.to_min: repeat
+      - number.increment: code
